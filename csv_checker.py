@@ -11,7 +11,6 @@ import logging
 import os
 import shutil
 import sys
-import typing
 from datetime import datetime
 
 DEBUG = False
@@ -26,7 +25,7 @@ Optional output file (if invalid) [use option -w] contains header and identified
 class ListHandler(logging.Handler):
     """Custom logging handler that appends log records to a list."""
 
-    def __init__(self, record_list: typing.List[str]):
+    def __init__(self, record_list: list[str]):
         super().__init__()
         self.record_list = record_list
 
@@ -76,9 +75,7 @@ class ParseDelimitedFile:
         self.filename = filename
         self.write_output_file = write_output_file
         self.ignore_over_count = ignore_over_count
-        self.expected_delimiter_count = (
-            0 if expected_delimiter_count <= 0 else expected_delimiter_count
-        )
+        self.expected_delimiter_count = max(0, expected_delimiter_count)
 
         # replacement_delimiter: when provided, write a modified file where
         # all parsed fields are joined using this delimiter (including header)
@@ -188,8 +185,7 @@ class ParseDelimitedFile:
             record_length,
             record_fields,
         ) in self.read_delimited_record(input_filename):
-            if record_length > max_record_length:
-                max_record_length = record_length
+            max_record_length = max(max_record_length, record_length)
 
             # record_fields is the list of parsed fields
             # join produces record string for storage/logging and compute field_count
@@ -264,7 +260,7 @@ class ParseDelimitedFile:
         if fixed_filehandle:
             try:
                 fixed_filehandle.close()
-            except IOError:
+            except OSError:
                 self.logger.exception("%s- Failed closing fixed file", self.batch_id)
             except ValueError:
                 self.logger.exception("%s- Fixed file already closed", self.batch_id)
@@ -326,14 +322,12 @@ class ParseDelimitedFile:
                     )
                 else:
                     try:
-                        os.remove(
-                            original_filename + self.FILESUFFIX
-                        )  # if not keeping original, remove original file with .ORIGINAL suffix since we have replaced original file with new file with replacement delimiter
+                        os.remove(original_filename)
                     except FileNotFoundError:
                         self.logger.exception(
-                            "%sFailed to remove original file with FILESUFFIX: %s",
+                            "%sFailed to remove original file with .ORIGINAL suffix: %s",
                             self.batch_id,
-                            original_filename + self.FILESUFFIX,
+                            original_filename,
                         )
 
             return header_delimiter_count
@@ -394,7 +388,7 @@ class ParseDelimitedFile:
             message.append("dcnt records\n")
             message.append("---- --------\n")
             message.append(
-                f"{header_delimiter_count:0>4d} {delimiters_found[header_delimiter_count]:0>8d} (header{'+matching detail' if delimiters_found[header_delimiter_count] > 1 else ''})\n"
+                f"{header_delimiter_count:0>4d} {delimiters_found[header_delimiter_count]:0>8d} (header{' + ' + str(delimiters_found[header_delimiter_count] - 1) + ' matching detail' if delimiters_found[header_delimiter_count] > 1 else ''})\n"
             )
             message.append(
                 "\n".join(
@@ -422,7 +416,7 @@ class ParseDelimitedFile:
                 if counter <= self.BAD_RECORD_REPORTING_THRESHOLD:
                     if counter == 1:
                         message.append(
-                            f"{key}:{self.bad_records[key]} (header{'+matching detail' if delimiters_found[header_delimiter_count] > 1 else ''})\n"
+                            f"{key}:{self.bad_records[key]} (header{' + ' + str(delimiters_found[header_delimiter_count] - 1) + ' matching detail' if delimiters_found[header_delimiter_count] > 1 else ''})\n"
                         )
                     else:
                         message.append(f"{key}:{self.bad_records[key]}\n")

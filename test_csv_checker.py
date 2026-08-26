@@ -2,10 +2,11 @@
 
 import builtins as _builtins
 import io
-from os import path
 import sys
 import unittest
-from unittest.mock import patch, call
+from os import path
+from unittest.mock import call, patch
+
 import csv_checker as cc1
 
 # python -m unittest test_async_batch_scanner.py -v
@@ -277,7 +278,7 @@ class CSVChecker(unittest.TestCase):
             self.assertFalse(pdf.parse_records())
 
     @identify
-    def test_replacement_delimiter_writes_fixed_file_keeps_original(self):
+    def test_replacement_delimiter_writes_fixed_file_deletes_original_by_default(self):
         # header + two rows
         content = "col1,col2,col3\nval1,val2,val3\nval4,val5,val6"
         replacement = "|"
@@ -302,11 +303,13 @@ class CSVChecker(unittest.TestCase):
             def getvalue(self):
                 return "".join(self._parts)
 
-
         def open_side_effect(file, mode="r", encoding=None, *args, **kwargs):
             fname = str(file)
             # support reading either the original filename or the renamed .ORIGINAL filename
-            if (fname.endswith(self.goodfile) or fname.endswith(self.goodfile + ".ORIGINAL")) and "r" in mode:
+            if (
+                fname.endswith(self.goodfile)
+                or fname.endswith(self.goodfile + ".ORIGINAL")
+            ) and "r" in mode:
                 return io.StringIO(content)
             # capture write to file
             if "w" in mode and fname.endswith(self.goodfile + ".FIXED"):
@@ -314,10 +317,12 @@ class CSVChecker(unittest.TestCase):
                 return fixed_capture["f"]
             return _original_open(file, mode, encoding=encoding, *args, **kwargs)
 
-        # patch os.replace to avoid touching the real filesystem and assert it's called
-        with patch("builtins.open", side_effect=open_side_effect), patch(
-            "csv_checker.shutil.move"
-        ) as mock_replace:
+        # Patch moves and deletion to avoid touching the real filesystem.
+        with (
+            patch("builtins.open", side_effect=open_side_effect),
+            patch("csv_checker.shutil.move") as mock_replace,
+            patch("csv_checker.os.remove") as mock_remove,
+        ):
             filename = path.join(self.directory, self.goodfile)
             pdf = cc1.ParseDelimitedFile(
                 self.delimiter,
@@ -325,7 +330,6 @@ class CSVChecker(unittest.TestCase):
                 write_output_file=True,
                 batch_id=BATCH_ID,
                 replacement_delimiter=replacement,
-                keep_original=True,
             )
             # run parse; expect it to return header delimiter count (2)
             self.assertEqual(pdf.parse_records(), 2)
@@ -338,11 +342,14 @@ class CSVChecker(unittest.TestCase):
                 ],
                 any_order=False,
             )
+            mock_remove.assert_called_once_with(filename + ".ORIGINAL")
             # verify fixed file was written and contents use replacement delimiter
             self.assertIsNotNone(fixed_capture["f"])
             fixed_value = fixed_capture["f"].getvalue()
             # csv.writer with delimiter='|' and lineterminator='\n' will yield rows joined by '|'
             expected = "col1|col2|col3\nval1|val2|val3\nval4|val5|val6\n"
             self.assertEqual(fixed_value, expected)
+
+
 if __name__ == "__main__":
     unittest.main()
