@@ -73,7 +73,12 @@ class CSVChecker(unittest.TestCase):
             pdf = cc1.ParseDelimitedFile(
                 self.delimiter, self.filename, True, batch_id=BATCH_ID
             )
-            self.assertTrue(pdf.parse_records())
+            with self.assertLogs("csv_checker", level="INFO") as logs:
+                self.assertTrue(pdf.parse_records())
+            self.assertIn(
+                "All detail records match the header delimiter count.",
+                "\n".join(logs.output),
+            )
 
     @identify
     def test_good_file_without_outputfile(self):
@@ -95,6 +100,43 @@ class CSVChecker(unittest.TestCase):
                 self.delimiter, self.filename, False, batch_id=BATCH_ID
             )
             self.assertTrue(pdf.parse_records())
+
+    @identify
+    def test_good_file_with_trailing_blank_line(self):
+        good_content = "col1|col2|col3\nval1|val2|val3\n\n"
+
+        def open_side_effect(file, mode="r", encoding=None, *args, **kwargs):
+            fname = str(file)
+            if fname.endswith(self.goodfile) and "r" in mode:
+                return io.StringIO(good_content)
+            return _original_open(file, mode, encoding=encoding, *args, **kwargs)
+
+        with patch("builtins.open", side_effect=open_side_effect):
+            filename = path.join(self.directory, self.goodfile)
+            pdf = cc1.ParseDelimitedFile("|", filename, False, batch_id=BATCH_ID)
+            self.assertEqual(pdf.parse_records(), 2)
+
+    @identify
+    def test_bad_file_when_first_row_has_no_delimiter(self):
+        delimiter_free_content = "col1\nval1\nval2"
+
+        def open_side_effect(file, mode="r", encoding=None, *args, **kwargs):
+            fname = str(file)
+            if fname.endswith(self.badfile) and "r" in mode:
+                return io.StringIO(delimiter_free_content)
+            return _original_open(file, mode, encoding=encoding, *args, **kwargs)
+
+        with patch("builtins.open", side_effect=open_side_effect):
+            filename = path.join(self.directory, self.badfile)
+            pdf = cc1.ParseDelimitedFile(
+                self.delimiter, filename, False, batch_id=BATCH_ID
+            )
+            with self.assertLogs("csv_checker", level="ERROR") as logs:
+                self.assertFalse(pdf.parse_records())
+            self.assertIn(
+                "The configured delimiter ',' was not found in the first row.",
+                "\n".join(logs.output),
+            )
 
     @identify
     def test_bad_file_with_outputfile(self):
@@ -190,7 +232,7 @@ class CSVChecker(unittest.TestCase):
 
         def open_side_effect(file, mode="r", encoding=None, *args, **kwargs):
             fname = str(file)
-            if fname.endswith(self.badfile) and "r" in mode:
+            if fname.endswith(self.badunder) and "r" in mode:
                 return io.StringIO(bad_content)
             if "w" in mode and fname.endswith(
                 cc1.ParseDelimitedFile.ERROR_DELIMITER_FILE_SUFFIX
@@ -211,7 +253,7 @@ class CSVChecker(unittest.TestCase):
 
         def open_side_effect(file, mode="r", encoding=None, *args, **kwargs):
             fname = str(file)
-            if fname.endswith(self.badfile) and "r" in mode:
+            if fname.endswith(self.badover) and "r" in mode:
                 return io.StringIO(bad_content)
             if "w" in mode and fname.endswith(
                 cc1.ParseDelimitedFile.ERROR_DELIMITER_FILE_SUFFIX
@@ -228,11 +270,11 @@ class CSVChecker(unittest.TestCase):
 
     @identify
     def test_bad_overfile_with_outputfile_ignore(self):
-        bad_content = "col1,col2,col3\nval1,val2,val3\nval4,val5\nval6\nval7"
+        bad_content = "col1,col2,col3\nval1,val2,val3,val4\nval5,val6,val7,val8"
 
         def open_side_effect(file, mode="r", encoding=None, *args, **kwargs):
             fname = str(file)
-            if fname.endswith(self.badfile) and "r" in mode:
+            if fname.endswith(self.badover) and "r" in mode:
                 return io.StringIO(bad_content)
             if "w" in mode and fname.endswith(
                 cc1.ParseDelimitedFile.ERROR_DELIMITER_FILE_SUFFIX
@@ -249,7 +291,12 @@ class CSVChecker(unittest.TestCase):
                 ignore_over_count=True,
                 batch_id=BATCH_ID,
             )
-            self.assertTrue(pdf.parse_records())
+            with self.assertLogs("csv_checker", level="WARNING") as logs:
+                self.assertTrue(pdf.parse_records())
+            self.assertIn(
+                "All records meet or exceed the header delimiter count; overcount records were ignored.",
+                "\n".join(logs.output),
+            )
 
     @identify
     def test_good_wrong_file_with_outputfile(self):
@@ -275,7 +322,12 @@ class CSVChecker(unittest.TestCase):
                 expected_delimiter_count=3,
                 batch_id=BATCH_ID,
             )
-            self.assertFalse(pdf.parse_records())
+            with self.assertLogs("csv_checker", level="ERROR") as logs:
+                self.assertFalse(pdf.parse_records())
+            self.assertIn(
+                "One or more records do not match the expected delimiter count.",
+                "\n".join(logs.output),
+            )
 
     @identify
     def test_replacement_delimiter_writes_fixed_file_deletes_original_by_default(self):

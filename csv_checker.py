@@ -153,6 +153,7 @@ class ParseDelimitedFile:
         fixed_filehandle = None
         fixed_filename = self.filename + ".FIXED"
         header_delimiter_count = 0
+        header_missing_delimiter = False
         input_filename = self.filename
         record_count = 0
         nested_delimiter_count = 0
@@ -212,6 +213,7 @@ class ParseDelimitedFile:
             # to correctly handle nested delimiters inside quoted fields.
             if record_count == 1:
                 header_delimiter_count = field_count - 1
+                header_missing_delimiter = header_delimiter_count == 0
                 delimiters_found[header_delimiter_count] = 1
                 self.save_bad_records(record, record_count, header_delimiter_count)
                 continue
@@ -268,7 +270,7 @@ class ParseDelimitedFile:
         self.logger.info("%s", self.batch_id)
 
         # GOOD FILE: all records have same delimiter count as header record (and match expected_delimiter_count if provided)
-        if bad_record_count == 0:
+        if bad_record_count == 0 and not header_missing_delimiter:
             self.logger.info("%sDelimited Record Counts:", self.batch_id)
             self.logger.info(
                 "%s- Delimiter count: %d", self.batch_id, header_delimiter_count
@@ -276,6 +278,10 @@ class ParseDelimitedFile:
             self.logger.info("%s- Total records  : %d", self.batch_id, record_count)
             self.logger.info("")
             self.logger.info("%sFile is GOOD", self.batch_id)
+            self.logger.info(
+                "%sAll detail records match the header delimiter count.",
+                self.batch_id,
+            )
 
             # if replacement_delimiter provided, we have already written out the modified file with replacement delimiter,
             # so now we can rename files to replace original file with modified file with replacement delimiter
@@ -336,17 +342,43 @@ class ParseDelimitedFile:
         # This means we have some records with under header delimiter count but no records with over header delimiter count,
         # so we can consider this a FAIR file with some bad records that should be investigated but not necessarily rejected for processing
         # (e.g. if filename is correct and we have some bad records but no good records, we may want to process the file and handle bad records in downstream processing rather than rejecting the file outright)
-        if self.ignore_over_count and record_over_count > 0 and record_under_count == 0:
+        if (
+            not header_missing_delimiter
+            and self.ignore_over_count
+            and record_over_count > 0
+            and record_under_count == 0
+        ):
             self.logger.warning(
                 "%sFile is FAIR (ignoring %d overcount records)",
                 self.batch_id,
                 bad_record_count,
+            )
+            self.logger.warning(
+                "%sAll records meet or exceed the header delimiter count; overcount records were ignored.",
+                self.batch_id,
             )
             return header_delimiter_count
 
         # BAD FILE: some/all records have different delimiter count as header record and/or do not match expected_delimiter_count if provided
         # Logging details for bad file
         self.logger.error("%sFile is BAD", self.batch_id)
+        status_reasons = []
+        if header_missing_delimiter:
+            status_reasons.append(
+                f"The configured delimiter {self.delimiter!r} was not found in the first row."
+            )
+        if self.expected_delimiter_count > 0 and (
+            self.expected_delimiter_count != header_delimiter_count
+            or actual_not_expected_delimiter_count
+        ):
+            status_reasons.append(
+                "One or more records do not match the expected delimiter count."
+            )
+        if record_under_count or record_over_count:
+            status_reasons.append(
+                "One or more detail records do not match the header delimiter count."
+            )
+        self.logger.error("%s%s", self.batch_id, " ".join(status_reasons))
         if actual_not_expected_delimiter_count:
             self.logger.error(
                 "%s- Possible reasons: correct filename/wrong data or wrong file",
@@ -457,6 +489,8 @@ class ParseDelimitedFile:
                 for record in csv.reader(csvfile, delimiter=self.delimiter):
                     ctr += 1
                     self.logger.debug(f"{self.batch_id}Record {ctr}: {record}")
+                    if not record:
+                        continue
                     total_field_length = sum(len(rec) for rec in record)
                     delimiter_counter = len(record) - 1
                     record_length = total_field_length + delimiter_counter
